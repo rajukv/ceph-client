@@ -1214,6 +1214,7 @@ struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end,
 	if (len > 0) {
 		newcrush = crush_decode(*p, min(*p+len, end));
 		if (IS_ERR(newcrush)) {
+			printk("%s:%d new crush has error\n", __func__, __LINE__);
 			err = PTR_ERR(newcrush);
 			newcrush = NULL;
 			goto bad;
@@ -1231,8 +1232,10 @@ struct ceph_osdmap *osdmap_apply_incremental(void **p, void *end,
 	ceph_decode_32_safe(p, end, max, e_inval);
 	if (max >= 0) {
 		err = osdmap_set_max_osd(map, max);
-		if (err)
+		if (err) {
+			printk("%s:%d: set max osd error %d\n", __func__, __LINE__, err);
 			goto bad;
+		}
 	}
 
 	map->epoch++;

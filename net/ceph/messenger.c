@@ -21,6 +21,9 @@
 #include <linux/ceph/decode.h>
 #include <linux/ceph/pagelist.h>
 #include <linux/export.h>
+#ifdef ENABLE_XIO
+#include "xio_msgr.h"
+#endif
 
 #define list_entry_next(pos, member)					\
 	list_entry(pos->member.next, typeof(*pos), member)
@@ -176,7 +179,7 @@ static struct lock_class_key socket_class;
 static void queue_con(struct ceph_connection *con);
 static void cancel_con(struct ceph_connection *con);
 static void con_work(struct work_struct *);
-static void con_fault(struct ceph_connection *con);
+void con_fault(struct ceph_connection *con);
 
 /*
  * Nicely render a sockaddr as a string.  An array of formatted
@@ -292,6 +295,9 @@ int ceph_msgr_init(void)
 	if (ceph_msgr_slab_init())
 		return -ENOMEM;
 
+#ifdef ENABLE_XIO
+	ceph_xio_msgr_init();
+#endif
 	ceph_msgr_wq = alloc_workqueue("ceph-msgr",
 				       WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
 	if (ceph_msgr_wq)
@@ -601,6 +607,10 @@ static int con_close_socket(struct ceph_connection *con)
 {
 	int rc = 0;
 
+	if (con->msgr->ms_type == CEPH_MSNGR_TYPE_XIO) {
+		rc = ceph_xio_close_conn(con);
+		return rc;
+	}
 	dout("con_close_socket on %p sock %p\n", con, con->sock);
 	if (con->sock) {
 		rc = con->sock->ops->shutdown(con->sock, SHUT_RDWR);
@@ -624,7 +634,7 @@ static int con_close_socket(struct ceph_connection *con)
  * Reset a connection.  Discard all incoming and outgoing messages
  * and clear *_seq state.
  */
-static void ceph_msg_remove(struct ceph_msg *msg)
+void ceph_msg_remove(struct ceph_msg *msg)
 {
 	list_del_init(&msg->list_head);
 	BUG_ON(msg->con == NULL);
@@ -647,6 +657,9 @@ static void reset_connection(struct ceph_connection *con)
 	/* reset connection, out_queue, msg_ and connect_seq */
 	/* discard existing out_queue and msg_seq */
 	dout("reset_connection %p\n", con);
+	printk("%s:%d: reset_connection %p\n", __func__, __LINE__, con);
+	printk("out Q empty=%d, out sent empty = %d\n", list_empty(&con->out_queue), list_empty(&con->out_sent));
+	printk("in_msg=%p, out_msg=%p\n", con->in_msg, con->out_msg);
 	ceph_msg_remove_list(&con->out_queue);
 	ceph_msg_remove_list(&con->out_sent);
 
@@ -676,6 +689,8 @@ void ceph_con_close(struct ceph_connection *con)
 	mutex_lock(&con->mutex);
 	dout("con_close %p peer %s\n", con,
 	     ceph_pr_addr(&con->peer_addr.in_addr));
+	printk("%s %p peer %s\n", __func__, con,
+	     ceph_pr_addr(&con->peer_addr.in_addr));
 	con->state = CON_STATE_CLOSED;
 
 	con_flag_clear(con, CON_FLAG_LOSSYTX);	/* so we retry next connect */
@@ -700,6 +715,7 @@ void ceph_con_open(struct ceph_connection *con,
 {
 	mutex_lock(&con->mutex);
 	dout("con_open %p %s\n", con, ceph_pr_addr(&addr->in_addr));
+	printk("%s: open %p %s\n", __func__, con, ceph_pr_addr(&addr->in_addr));
 
 	WARN_ON(con->state != CON_STATE_CLOSED);
 	con->state = CON_STATE_PREOPEN;
@@ -710,7 +726,12 @@ void ceph_con_open(struct ceph_connection *con,
 	memcpy(&con->peer_addr, addr, sizeof(*addr));
 	con->delay = 0;      /* reset backoff memory */
 	mutex_unlock(&con->mutex);
-	queue_con(con);
+	if (con->msgr->ms_type == CEPH_MSNGR_TYPE_XIO) {
+		ceph_rdma_open(con);
+	}
+	else {
+		queue_con(con);
+	}
 }
 EXPORT_SYMBOL(ceph_con_open);
 
@@ -1101,7 +1122,7 @@ static void ceph_msg_data_cursor_init(struct ceph_msg *msg, size_t length)
  * data item, and supply the page offset and length of that piece.
  * Indicate whether this is the last piece in this data item.
  */
-static struct page *ceph_msg_data_next(struct ceph_msg_data_cursor *cursor,
+struct page *ceph_msg_data_next(struct ceph_msg_data_cursor *cursor,
 					size_t *page_offset, size_t *length,
 					bool *last_piece)
 {
@@ -1137,7 +1158,7 @@ static struct page *ceph_msg_data_next(struct ceph_msg_data_cursor *cursor,
  * Returns true if the result moves the cursor on to the next piece
  * of the data item.
  */
-static bool ceph_msg_data_advance(struct ceph_msg_data_cursor *cursor,
+bool ceph_msg_data_advance(struct ceph_msg_data_cursor *cursor,
 				size_t bytes)
 {
 	bool new_piece;
@@ -1174,7 +1195,7 @@ static bool ceph_msg_data_advance(struct ceph_msg_data_cursor *cursor,
 	return new_piece;
 }
 
-static void prepare_message_data(struct ceph_msg *msg, u32 data_len)
+void prepare_message_data(struct ceph_msg *msg, u32 data_len)
 {
 	BUG_ON(!msg);
 	BUG_ON(!data_len);
@@ -1479,7 +1500,7 @@ out:
 	return ret;  /* done! */
 }
 
-static u32 ceph_crc32c_page(u32 crc, struct page *page,
+u32 ceph_crc32c_page(u32 crc, struct page *page,
 				unsigned int page_offset,
 				unsigned int length)
 {
@@ -2840,7 +2861,7 @@ static void con_work(struct work_struct *work)
  * Generic error/fault handler.  A retry mechanism is used with
  * exponential backoff
  */
-static void con_fault(struct ceph_connection *con)
+void con_fault(struct ceph_connection *con)
 {
 	pr_warn("%s%lld %s %s\n", ENTITY_NAME(con->peer_name),
 		ceph_pr_addr(&con->peer_addr.in_addr), con->error_msg);
@@ -2898,7 +2919,7 @@ void ceph_messenger_init(struct ceph_messenger *msgr,
 			struct ceph_entity_addr *myaddr,
 			u64 supported_features,
 			u64 required_features,
-			bool nocrc)
+			bool nocrc, char *ms_type)
 {
 	msgr->supported_features = supported_features;
 	msgr->required_features = required_features;
@@ -2908,6 +2929,12 @@ void ceph_messenger_init(struct ceph_messenger *msgr,
 	if (myaddr)
 		msgr->inst.addr = *myaddr;
 
+	if (strcmp(ms_type, "xio") == 0) {
+		msgr->ms_type = CEPH_MSNGR_TYPE_XIO;
+	}
+	else {
+		msgr->ms_type = CEPH_MSNGR_TYPE_TCP;
+	}
 	/* select a random nonce */
 	msgr->inst.addr.type = 0;
 	get_random_bytes(&msgr->inst.addr.nonce, sizeof(msgr->inst.addr.nonce));
@@ -2946,6 +2973,7 @@ void ceph_con_send(struct ceph_connection *con, struct ceph_msg *msg)
 
 	if (con->state == CON_STATE_CLOSED) {
 		dout("con_send %p closed, dropping %p\n", con, msg);
+		printk("%s:%d %p closed, dropping %p\n", __func__, __LINE__, con, msg);
 		ceph_msg_put(msg);
 		mutex_unlock(&con->mutex);
 		return;
@@ -2967,10 +2995,16 @@ void ceph_con_send(struct ceph_connection *con, struct ceph_msg *msg)
 	clear_standby(con);
 	mutex_unlock(&con->mutex);
 
-	/* if there wasn't anything waiting to send before, queue
-	 * new work */
-	if (con_flag_test_and_set(con, CON_FLAG_WRITE_PENDING) == 0)
-		queue_con(con);
+	if (con->msgr->ms_type == CEPH_MSNGR_TYPE_XIO) {
+		ceph_rdma_send(con);
+	}
+	else {
+		/* if there wasn't anything waiting to send before, queue
+		 * new work */
+		if (con_flag_test_and_set(con, CON_FLAG_WRITE_PENDING) == 0) {
+			queue_con(con);
+		}
+	}
 }
 EXPORT_SYMBOL(ceph_con_send);
 
@@ -2987,6 +3021,7 @@ void ceph_msg_revoke(struct ceph_msg *msg)
 	mutex_lock(&con->mutex);
 	if (!list_empty(&msg->list_head)) {
 		dout("%s %p msg %p - was on queue\n", __func__, con, msg);
+		printk("%s %p msg %p - was on queue\n", __func__, con, msg);
 		list_del_init(&msg->list_head);
 		BUG_ON(msg->con == NULL);
 		msg->con->ops->put(msg->con);
@@ -2997,6 +3032,7 @@ void ceph_msg_revoke(struct ceph_msg *msg)
 	}
 	if (con->out_msg == msg) {
 		dout("%s %p msg %p - was sending\n", __func__, con, msg);
+		printk("%s %p msg %p - was sending\n", __func__, con, msg);
 		con->out_msg = NULL;
 		if (con->out_kvec_is_msg) {
 			con->out_skip = con->out_kvec_bytes;
@@ -3023,6 +3059,11 @@ void ceph_msg_revoke_incoming(struct ceph_msg *msg)
 		return;		/* Message not in our possession */
 	}
 
+#ifdef ENABLE_XIO
+	// TODO
+	dout("%s:%d msg = %p returning for RDMA\n", __func__, __LINE__, msg);
+	return;
+#endif
 	con = msg->con;
 	mutex_lock(&con->mutex);
 	if (con->in_msg == msg) {
@@ -3058,6 +3099,10 @@ void ceph_con_keepalive(struct ceph_connection *con)
 	mutex_lock(&con->mutex);
 	clear_standby(con);
 	mutex_unlock(&con->mutex);
+#ifdef ENABLE_XIO
+	dout("%s:%d: Ignoring keepalive request!!\n", __func__, __LINE__);
+	return;
+#endif
 	if (con_flag_test_and_set(con, CON_FLAG_KEEPALIVE_PENDING) == 0 &&
 	    con_flag_test_and_set(con, CON_FLAG_WRITE_PENDING) == 0)
 		queue_con(con);
@@ -3204,7 +3249,7 @@ EXPORT_SYMBOL(ceph_msg_new);
  * propagate the error to the caller based on info in the front) when
  * the middle is too large.
  */
-static int ceph_alloc_middle(struct ceph_connection *con, struct ceph_msg *msg)
+int ceph_alloc_middle(struct ceph_connection *con, struct ceph_msg *msg)
 {
 	int type = le16_to_cpu(msg->hdr.type);
 	int middle_len = le32_to_cpu(msg->hdr.middle_len);
@@ -3301,8 +3346,13 @@ static void ceph_msg_release(struct kref *kref)
 	struct list_head *links;
 	struct list_head *next;
 
-	dout("%s %p\n", __func__, m);
-	WARN_ON(!list_empty(&m->list_head));
+	dout("ceph_msg_put last one on %p\n", m);
+	if (!list_empty(&m->list_head)) {
+		printk("list not empty. m=%p, l=%p, n=%p, p=%p\n",
+				m, &m->list_head, m->list_head.next,
+				m->list_head.prev);
+		WARN_ON(1);
+	}
 
 	/* drop middle, data, if any */
 	if (m->middle) {

@@ -426,6 +426,7 @@ static ssize_t rbd_remove_single_major(struct bus_type *bus, const char *buf,
 static int rbd_dev_image_probe(struct rbd_device *rbd_dev, bool mapping);
 static void rbd_spec_put(struct rbd_spec *spec);
 
+#if 0
 static struct bus_attribute rbd_bus_attrs[] = {
 	__ATTR(add, S_IWUSR, NULL, rbd_add),
 	__ATTR(remove, S_IWUSR, NULL, rbd_remove),
@@ -439,6 +440,20 @@ static struct bus_attribute rbd_bus_attrs_single_major[] = {
 	__ATTR(remove_single_major, S_IWUSR, NULL, rbd_remove_single_major),
 	__ATTR_NULL
 };
+#endif
+
+static BUS_ATTR(add, S_IWUSR, NULL, rbd_add);
+static BUS_ATTR(remove, S_IWUSR, NULL, rbd_remove);
+static BUS_ATTR(add_single_major, S_IWUSR, NULL, rbd_add_single_major);
+static BUS_ATTR(remove_single_major, S_IWUSR, NULL, rbd_remove_single_major);
+
+static struct attribute *rbd_bus_attrs[] = {
+	&bus_attr_add.attr,
+	&bus_attr_remove.attr,
+	&bus_attr_add_single_major.attr,
+	&bus_attr_remove_single_major.attr,
+	NULL,
+};
 
 static int rbd_dev_id_to_minor(int dev_id)
 {
@@ -450,9 +465,12 @@ static int minor_to_rbd_dev_id(int minor)
 	return minor >> RBD_SINGLE_MAJOR_PART_SHIFT;
 }
 
+ATTRIBUTE_GROUPS(rbd_bus);
+
 static struct bus_type rbd_bus_type = {
 	.name		= "rbd",
-	.bus_attrs	= rbd_bus_attrs,
+	//.bus_attrs	= rbd_bus_attrs,
+	.bus_groups     = rbd_bus_groups,
 };
 
 static void rbd_root_dev_release(struct device *dev)
@@ -3179,15 +3197,20 @@ static struct rbd_obj_request *rbd_obj_watch_request_helper(
 		ceph_osdc_set_request_linger(osdc, obj_request->osd_req);
 
 	ret = rbd_obj_request_submit(osdc, obj_request);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd obj req submit ret = %d\n", __func__, __LINE__, ret);
 		goto out;
+	}
 
 	ret = rbd_obj_request_wait(obj_request);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd obj req wait ret = %d\n", __func__, __LINE__, ret);
 		goto out;
+	}
 
 	ret = obj_request->result;
 	if (ret) {
+		printk("%s:%d: rbd obj req result ret = %d\n", __func__, __LINE__, ret);
 		if (watch)
 			rbd_obj_request_end(obj_request);
 		goto out;
@@ -4165,8 +4188,10 @@ static int rbd_dev_v2_object_prefix(struct rbd_device *rbd_dev)
 				"rbd", "get_object_prefix", NULL, 0,
 				reply_buf, RBD_OBJ_PREFIX_LEN_MAX);
 	dout("%s: rbd_obj_method_sync returned %d\n", __func__, ret);
-	if (ret < 0)
+	if (ret < 0) {
+		printk("%s:%d: rbd obj meth sync ret = %d\n", __func__, __LINE__, ret);
 		goto out;
+	}
 
 	p = reply_buf;
 	rbd_dev->header.object_prefix = ceph_extract_encoded_string(&p,
@@ -4176,6 +4201,7 @@ static int rbd_dev_v2_object_prefix(struct rbd_device *rbd_dev)
 	if (IS_ERR(rbd_dev->header.object_prefix)) {
 		ret = PTR_ERR(rbd_dev->header.object_prefix);
 		rbd_dev->header.object_prefix = NULL;
+		printk("%s:%d: rbd dev hdr obj prefix ret = %d\n", __func__, __LINE__, ret);
 	} else {
 		dout("  object_prefix = %s\n", rbd_dev->header.object_prefix);
 	}
@@ -4201,8 +4227,10 @@ static int _rbd_dev_v2_snap_features(struct rbd_device *rbd_dev, u64 snap_id,
 				&snapid, sizeof (snapid),
 				&features_buf, sizeof (features_buf));
 	dout("%s: rbd_obj_method_sync returned %d\n", __func__, ret);
-	if (ret < 0)
+	if (ret < 0) {
+		printk("%s:%d: rbd dev obj method sync ret = %d\n", __func__, __LINE__, ret);
 		return ret;
+	}
 	if (ret < sizeof (features_buf))
 		return -ERANGE;
 
@@ -4713,13 +4741,17 @@ static int rbd_dev_v2_header_info(struct rbd_device *rbd_dev)
 	int ret;
 
 	ret = rbd_dev_v2_image_size(rbd_dev);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd dev img sz ret = %d\n", __func__, __LINE__, ret);
 		return ret;
+	}
 
 	if (first_time) {
 		ret = rbd_dev_v2_header_onetime(rbd_dev);
-		if (ret)
+		if (ret) {
+			printk("%s:%d: rbd dev hdr one time ret = %d\n", __func__, __LINE__, ret);
 			return ret;
+		}
 	}
 
 	ret = rbd_dev_v2_snap_context(rbd_dev);
@@ -5174,23 +5206,29 @@ static int rbd_dev_v2_header_onetime(struct rbd_device *rbd_dev)
 	int ret;
 
 	ret = rbd_dev_v2_object_prefix(rbd_dev);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd dev obj prefix ret = %d\n", __func__, __LINE__, ret);
 		goto out_err;
+	}
 
 	/*
 	 * Get the and check features for the image.  Currently the
 	 * features are assumed to never change.
 	 */
 	ret = rbd_dev_v2_features(rbd_dev);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd dev features ret = %d\n", __func__, __LINE__, ret);
 		goto out_err;
+	}
 
 	/* If the image supports fancy striping, get its parameters */
 
 	if (rbd_dev->header.features & RBD_FEATURE_STRIPINGV2) {
 		ret = rbd_dev_v2_striping_info(rbd_dev);
-		if (ret < 0)
+		if (ret < 0) {
+			printk("%s:%d: rbd dev striping info ret = %d\n", __func__, __LINE__, ret);
 			goto out_err;
+		}
 	}
 	/* No support for crypto and compression type format 2 images */
 
@@ -5370,22 +5408,30 @@ static int rbd_dev_image_probe(struct rbd_device *rbd_dev, bool mapping)
 	 * will be set to either 1 or 2.
 	 */
 	ret = rbd_dev_image_id(rbd_dev);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd dev img id ret = %d\n", __func__, __LINE__, ret);
 		return ret;
+	}
 
 	ret = rbd_dev_header_name(rbd_dev);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd dev hdr name ret = %d\n", __func__, __LINE__, ret);
 		goto err_out_format;
+	}
 
 	if (mapping) {
 		ret = rbd_dev_header_watch_sync(rbd_dev);
-		if (ret)
+		if (ret) {
+			printk("%s:%d: rbd dev hdr watch sync ret = %d\n", __func__, __LINE__, ret);
 			goto out_header_name;
+		}
 	}
 
 	ret = rbd_dev_header_info(rbd_dev);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd dev hdr info ret = %d\n", __func__, __LINE__, ret);
 		goto err_out_watch;
+	}
 
 	/*
 	 * If this image is the one being mapped, we have pool name and
@@ -5415,8 +5461,10 @@ static int rbd_dev_image_probe(struct rbd_device *rbd_dev, bool mapping)
 	}
 
 	ret = rbd_dev_probe_parent(rbd_dev);
-	if (ret)
+	if (ret) {
+		printk("%s:%d: rbd dev probe parent ret = %d\n", __func__, __LINE__, ret);
 		goto err_out_probe;
+	}
 
 	dout("discovered format %u image, header name is %s\n",
 		rbd_dev->image_format, rbd_dev->header_name);
@@ -5454,14 +5502,17 @@ static ssize_t do_rbd_add(struct bus_type *bus,
 
 	/* parse add command */
 	rc = rbd_add_parse_args(buf, &ceph_opts, &rbd_opts, &spec);
-	if (rc < 0)
+	if (rc < 0) {
+		printk("%s:%d args parse error rc %d\n", __func__, __LINE__, rc);
 		goto err_out_module;
+	}
 	read_only = rbd_opts->read_only;
 	kfree(rbd_opts);
 	rbd_opts = NULL;	/* done with this */
 
 	rbdc = rbd_get_client(ceph_opts);
 	if (IS_ERR(rbdc)) {
+		printk("%s:%d get client error\n", __func__, __LINE__);
 		rc = PTR_ERR(rbdc);
 		goto err_out_args;
 	}
@@ -5482,14 +5533,18 @@ static ssize_t do_rbd_add(struct bus_type *bus,
 	}
 
 	rbd_dev = rbd_dev_create(rbdc, spec);
-	if (!rbd_dev)
+	if (!rbd_dev) {
+		printk("%s:%d rbd dev create\n", __func__, __LINE__);
 		goto err_out_client;
+	}
 	rbdc = NULL;		/* rbd_dev now owns this */
 	spec = NULL;		/* rbd_dev now owns this */
 
 	rc = rbd_dev_image_probe(rbd_dev, true);
-	if (rc < 0)
+	if (rc < 0) {
+		printk("%s:%d dev image probe err rc %d\n", __func__, __LINE__, rc);
 		goto err_out_rbd_dev;
+	}
 
 	/* If we are mapping a snapshot it must be marked read-only */
 
@@ -5499,6 +5554,7 @@ static ssize_t do_rbd_add(struct bus_type *bus,
 
 	rc = rbd_dev_device_setup(rbd_dev);
 	if (rc) {
+		printk("%s:%d dev image setup err rc %d\n", __func__, __LINE__, rc);
 		/*
 		 * rbd_dev_header_unwatch_sync() can't be moved into
 		 * rbd_dev_image_release() without refactoring, see
@@ -5521,6 +5577,7 @@ err_out_module:
 	module_put(THIS_MODULE);
 
 	dout("Error adding device %s\n", buf);
+	printk("Error adding device %s\n", buf);
 
 	return (ssize_t)rc;
 }
@@ -5759,14 +5816,14 @@ static int __init rbd_init(void)
 		goto err_out_slab;
 	}
 
-	rbd_bus_type.bus_attrs = rbd_bus_attrs;
+	// rbd_bus_type.bus_attrs = rbd_bus_attrs;
 	if (single_major) {
 		rbd_major = register_blkdev(0, RBD_DRV_NAME);
 		if (rbd_major < 0) {
 			rc = rbd_major;
 			goto err_out_wq;
 		}
-		rbd_bus_type.bus_attrs = rbd_bus_attrs_single_major;
+		// rbd_bus_type.bus_attrs = rbd_bus_attrs_single_major;
 	}
 
 	rc = rbd_sysfs_init();

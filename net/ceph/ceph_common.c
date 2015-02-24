@@ -139,6 +139,10 @@ int ceph_compare_options(struct ceph_options *new_opt,
 	if (ret)
 		return ret;
 
+	ret = strcmp_null(opt1->ms_type, opt2->ms_type);
+	if (ret)
+		return ret;
+
 	if (opt1->key && !opt2->key)
 		return -1;
 	if (!opt1->key && opt2->key)
@@ -245,6 +249,7 @@ enum {
 	Opt_noshare,
 	Opt_crc,
 	Opt_nocrc,
+	Opt_ms_type,
 };
 
 static match_table_t opt_tokens = {
@@ -258,6 +263,7 @@ static match_table_t opt_tokens = {
 	{Opt_secret, "secret=%s"},
 	{Opt_key, "key=%s"},
 	{Opt_ip, "ip=%s"},
+	{Opt_ms_type, "ms_type=%s"},
 	/* string args above */
 	{Opt_share, "share"},
 	{Opt_noshare, "noshare"},
@@ -354,6 +360,7 @@ ceph_parse_options(char *options, const char *dev_name,
 	opt->osd_keepalive_timeout = CEPH_OSD_KEEPALIVE_DEFAULT;
 	opt->mount_timeout = CEPH_MOUNT_TIMEOUT_DEFAULT; /* seconds */
 	opt->osd_idle_ttl = CEPH_OSD_IDLE_TTL_DEFAULT;   /* seconds */
+	strncpy(opt->ms_type, "tcp", 16);
 
 	/* get mon ip(s) */
 	/* ip1[:port1][,ip2[:port2]...] */
@@ -412,6 +419,9 @@ ceph_parse_options(char *options, const char *dev_name,
 			opt->name = kstrndup(argstr[0].from,
 					      argstr[0].to-argstr[0].from,
 					      GFP_KERNEL);
+			break;
+		case Opt_ms_type:
+			strncpy(opt->ms_type, argstr[0].from, 16);
 			break;
 		case Opt_secret:
 		        opt->key = kzalloc(sizeof(*opt->key), GFP_KERNEL);
@@ -516,7 +526,7 @@ struct ceph_client *ceph_create_client(struct ceph_options *opt, void *private,
 	ceph_messenger_init(&client->msgr, myaddr,
 		client->supported_features,
 		client->required_features,
-		ceph_test_opt(client, NOCRC));
+		ceph_test_opt(client, NOCRC), opt->ms_type);
 
 	/* subsystems */
 	err = ceph_monc_init(&client->monc, client);

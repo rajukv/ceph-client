@@ -71,8 +71,10 @@ static inline int ceph_has_room(void **p, void *end, size_t n)
 
 #define ceph_decode_need(p, end, n, bad)			\
 	do {							\
-		if (!likely(ceph_has_room(p, end, n)))		\
+		if (!likely(ceph_has_room(p, end, n)))		{\
+			printk("%s:%d err returning from here\n", __func__, __LINE__);\
 			goto bad;				\
+		}\
 	} while (0)
 
 #define ceph_decode_64_safe(p, end, v, bad)			\

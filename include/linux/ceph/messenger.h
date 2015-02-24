@@ -46,6 +46,14 @@ struct ceph_connection_operations {
 /* use format string %s%d */
 #define ENTITY_NAME(n) ceph_entity_type_name((n).type), le64_to_cpu((n).num)
 
+struct ceph_messenger_template {
+	const char *name;
+	int (*open_connection)(struct ceph_connection *con);
+	int (*close_connection)(struct ceph_connection *con);
+	int (*queue_msg)(struct ceph_connection *con);
+	int (*cancel_msg)(struct ceph_msg *m);
+};
+
 struct ceph_messenger {
 	struct ceph_entity_inst inst;    /* my name+address */
 	struct ceph_entity_addr my_enc_addr;
@@ -62,6 +70,7 @@ struct ceph_messenger {
 
 	u64 supported_features;
 	u64 required_features;
+	enum ceph_messenger_type ms_type;
 };
 
 enum ceph_msg_data_type {
@@ -160,6 +169,7 @@ struct ceph_msg {
 	unsigned long ack_stamp;        /* tx: when we were acked */
 
 	struct ceph_msgpool *pool;
+	void *msgr_ctx;		/* Any context that messenger may want to attach to the message */
 };
 
 /* ceph connection fault delay defaults, for exponential backoff */
@@ -257,7 +267,7 @@ extern void ceph_messenger_init(struct ceph_messenger *msgr,
 			struct ceph_entity_addr *myaddr,
 			u64 supported_features,
 			u64 required_features,
-			bool nocrc);
+			bool nocrc, char *ms_type);
 
 extern void ceph_con_init(struct ceph_connection *con, void *private,
 			const struct ceph_connection_operations *ops,

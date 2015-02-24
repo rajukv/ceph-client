@@ -172,5 +172,12 @@ struct ceph_msg_footer {
 #define CEPH_MSG_FOOTER_COMPLETE  (1<<0)   /* msg wasn't aborted */
 #define CEPH_MSG_FOOTER_NOCRC     (1<<1)   /* no data crc */
 
+/*
+ * Messenger types
+ */
+enum ceph_messenger_type {
+	CEPH_MSNGR_TYPE_TCP = 1,	/* Default messenger */
+	CEPH_MSNGR_TYPE_XIO = 2, 	/* XIO messenger */
+};
 
 #endif

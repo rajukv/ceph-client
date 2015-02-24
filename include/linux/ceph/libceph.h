@@ -55,6 +55,7 @@ struct ceph_options {
 					      pointer type of args */
 	int num_mon;
 	char *name;
+	char ms_type[16];
 	struct ceph_crypto_key *key;
 };
 
