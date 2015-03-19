@@ -57,6 +57,7 @@ struct ceph_options {
 	char *name;
 	char ms_type[16];
 	struct ceph_crypto_key *key;
+	struct ceph_messenger_template *ms_cb;
 };
 
 /*

@@ -550,7 +550,7 @@ void ceph_destroy_client(struct ceph_client *client)
 {
 	dout("destroy_client %p\n", client);
 
-	atomic_set(&client->msgr.stopping, 1);
+	ceph_messenger_destroy(&client->msgr);
 
 	/* unmount */
 	ceph_osdc_stop(&client->osdc);

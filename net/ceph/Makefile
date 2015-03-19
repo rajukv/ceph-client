@@ -1,12 +1,12 @@
 #
 # Makefile for CEPH filesystem.
 #
-EXTRA_CFLAGS := -I/root/raju/accelio/include -DENABLE_XIO -O0  -ggdb -g3 -gdwarf-4
+EXTRA_CFLAGS := -I/root/raju/accelio/include -O0  -ggdb -g3 -gdwarf-4
 
 obj-$(CONFIG_CEPH_LIB) += libceph.o
 
 libceph-y := ceph_common.o messenger.o msgpool.o buffer.o pagelist.o \
-	mon_client.o xio_messenger.o \
+	mon_client.o \
 	osd_client.o osdmap.o crush/crush.o crush/mapper.o crush/hash.o \
 	debugfs.o \
 	auth.o auth_none.o \

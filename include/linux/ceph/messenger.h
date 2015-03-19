@@ -51,7 +51,13 @@ struct ceph_messenger_template {
 	int (*open_connection)(struct ceph_connection *con);
 	int (*close_connection)(struct ceph_connection *con);
 	int (*queue_msg)(struct ceph_connection *con);
-	int (*cancel_msg)(struct ceph_msg *m);
+	int (*cancel_out_msg)(struct ceph_msg *m);
+	int (*cancel_in_msg)(struct ceph_msg *m);
+	int (*send_keepalive)(struct ceph_connection *con);
+
+	/* Private to ceph messenger code */
+	struct list_head msgr_list;
+	struct kref kref;
 };
 
 struct ceph_messenger {
@@ -70,7 +76,7 @@ struct ceph_messenger {
 
 	u64 supported_features;
 	u64 required_features;
-	enum ceph_messenger_type ms_type;
+	struct ceph_messenger_template *ms_cb;
 };
 
 enum ceph_msg_data_type {
@@ -191,7 +197,7 @@ struct ceph_connection {
 	struct ceph_messenger *msgr;
 
 	atomic_t sock_state;
-	struct socket *sock;
+	void *msngr_pvt;
 	struct ceph_entity_addr peer_addr; /* peer address */
 	struct ceph_entity_addr peer_addr_for_me;
 
@@ -268,6 +274,7 @@ extern void ceph_messenger_init(struct ceph_messenger *msgr,
 			u64 supported_features,
 			u64 required_features,
 			bool nocrc, char *ms_type);
+extern void ceph_messenger_destroy(struct ceph_messenger *msgr);
 
 extern void ceph_con_init(struct ceph_connection *con, void *private,
 			const struct ceph_connection_operations *ops,
@@ -300,5 +307,8 @@ extern struct ceph_msg *ceph_msg_get(struct ceph_msg *msg);
 extern void ceph_msg_put(struct ceph_msg *msg);
 
 extern void ceph_msg_dump(struct ceph_msg *msg);
+
+void ceph_register_new_messenger(struct ceph_messenger_template *messenger);
+void ceph_unregister_messenger(struct ceph_messenger_template *messenger);
 
 #endif
