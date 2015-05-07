@@ -1,7 +1,7 @@
 #
 # Makefile for CEPH filesystem.
 #
-EXTRA_CFLAGS := -I/root/raju/accelio/include -O0  -ggdb -g3 -gdwarf-4
+#EXTRA_CFLAGS := -O0  -ggdb -g3 -gdwarf-4
 
 obj-$(CONFIG_CEPH_LIB) += libceph.o
 

@@ -105,6 +105,23 @@
 static struct list_head messenger_list;
 static struct mutex messenger_mutex;
 
+static int ceph_tcp_open_conn(struct ceph_connection *con);
+static int ceph_tcp_close_conn(struct ceph_connection *con);
+static int ceph_con_tcp_send(struct ceph_connection *con);
+static int ceph_tcp_out_msg_cancel(struct ceph_msg *msg);
+static int ceph_tcp_in_msg_cancel(struct ceph_msg *msg);
+static int ceph_tcp_con_keepalive(struct ceph_connection *con);
+
+static struct ceph_messenger_template ceph_tcp_messenger = {
+	.name = "tcp",
+	.open_connection = ceph_tcp_open_conn,
+	.close_connection = ceph_tcp_close_conn,
+	.queue_msg = ceph_con_tcp_send,
+	.cancel_out_msg = ceph_tcp_out_msg_cancel,
+	.cancel_in_msg = ceph_tcp_in_msg_cancel,
+	.send_keepalive = ceph_tcp_con_keepalive,
+};
+
 static bool con_flag_valid(unsigned long con_flag)
 {
 	switch (con_flag) {
@@ -270,6 +287,54 @@ static void ceph_msgr_slab_exit(void)
 	kmem_cache_destroy(ceph_msg_cache);
 	ceph_msg_cache = NULL;
 }
+
+static void _ceph_msgr_exit(void)
+{
+	if (ceph_msgr_wq) {
+		destroy_workqueue(ceph_msgr_wq);
+		ceph_msgr_wq = NULL;
+	}
+
+	ceph_msgr_slab_exit();
+
+	BUG_ON(zero_page == NULL);
+	kunmap(zero_page);
+	page_cache_release(zero_page);
+	zero_page = NULL;
+	ceph_unregister_messenger(&ceph_tcp_messenger);
+}
+
+int ceph_msgr_init(void)
+{
+	BUG_ON(zero_page != NULL);
+	zero_page = ZERO_PAGE(0);
+	page_cache_get(zero_page);
+
+	if (ceph_msgr_slab_init())
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&messenger_list);
+	mutex_init(&messenger_mutex);
+	ceph_register_new_messenger(&ceph_tcp_messenger);
+	ceph_msgr_wq = alloc_workqueue("ceph-msgr",
+				       WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
+	if (ceph_msgr_wq)
+		return 0;
+
+	pr_err("msgr_init failed to create workqueue\n");
+	_ceph_msgr_exit();
+
+	return -ENOMEM;
+}
+EXPORT_SYMBOL(ceph_msgr_init);
+
+void ceph_msgr_exit(void)
+{
+	BUG_ON(ceph_msgr_wq == NULL);
+
+	_ceph_msgr_exit();
+}
+EXPORT_SYMBOL(ceph_msgr_exit);
 
 void ceph_msgr_flush(void)
 {
@@ -464,6 +529,16 @@ static int ceph_tcp_connect(struct ceph_connection *con)
 		con->error_msg = "connect error";
 
 		return ret;
+	}
+
+	if (con->msgr->tcp_nodelay) {
+		int optval = 1;
+
+		ret = kernel_setsockopt(sock, SOL_TCP, TCP_NODELAY,
+					(char *)&optval, sizeof(optval));
+		if (ret)
+			pr_err("kernel_setsockopt(TCP_NODELAY) failed: %d",
+			       ret);
 	}
 
 	sk_set_memalloc(sock->sk);
@@ -2915,7 +2990,9 @@ void ceph_messenger_init(struct ceph_messenger *msgr,
 			struct ceph_entity_addr *myaddr,
 			u64 supported_features,
 			u64 required_features,
-			bool nocrc, char *ms_type)
+			bool nocrc,
+			bool tcp_nodelay,
+			char *ms_type)
 {
 	msgr->supported_features = supported_features;
 	msgr->required_features = required_features;
@@ -2934,6 +3011,7 @@ void ceph_messenger_init(struct ceph_messenger *msgr,
 	get_random_bytes(&msgr->inst.addr.nonce, sizeof(msgr->inst.addr.nonce));
 	encode_my_addr(msgr);
 	msgr->nocrc = nocrc;
+	msgr->tcp_nodelay = tcp_nodelay;
 
 	atomic_set(&msgr->stopping, 0);
 
@@ -3477,61 +3555,3 @@ void ceph_unregister_messenger(struct ceph_messenger_template *messenger)
 }
 EXPORT_SYMBOL(ceph_register_new_messenger);
 EXPORT_SYMBOL(ceph_unregister_messenger);
-
-static struct ceph_messenger_template ceph_tcp_messenger = {
-	.name = "tcp",
-	.open_connection = ceph_tcp_open_conn,
-	.close_connection = ceph_tcp_close_conn,
-	.queue_msg = ceph_con_tcp_send,
-	.cancel_out_msg = ceph_tcp_out_msg_cancel,
-	.cancel_in_msg = ceph_tcp_in_msg_cancel,
-	.send_keepalive = ceph_tcp_con_keepalive,
-};
-
-static void _ceph_msgr_exit(void)
-{
-	if (ceph_msgr_wq) {
-		destroy_workqueue(ceph_msgr_wq);
-		ceph_msgr_wq = NULL;
-	}
-
-	ceph_msgr_slab_exit();
-
-	BUG_ON(zero_page == NULL);
-	kunmap(zero_page);
-	page_cache_release(zero_page);
-	zero_page = NULL;
-	ceph_unregister_messenger(&ceph_tcp_messenger);
-}
-
-int ceph_msgr_init(void)
-{
-	BUG_ON(zero_page != NULL);
-	zero_page = ZERO_PAGE(0);
-	page_cache_get(zero_page);
-
-	if (ceph_msgr_slab_init())
-		return -ENOMEM;
-
-	INIT_LIST_HEAD(&messenger_list);
-	mutex_init(&messenger_mutex);
-	ceph_register_new_messenger(&ceph_tcp_messenger);
-	ceph_msgr_wq = alloc_workqueue("ceph-msgr",
-				       WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
-	if (ceph_msgr_wq)
-		return 0;
-
-	pr_err("msgr_init failed to create workqueue\n");
-	_ceph_msgr_exit();
-
-	return -ENOMEM;
-}
-EXPORT_SYMBOL(ceph_msgr_init);
-
-void ceph_msgr_exit(void)
-{
-	BUG_ON(ceph_msgr_wq == NULL);
-
-	_ceph_msgr_exit();
-}
-EXPORT_SYMBOL(ceph_msgr_exit);

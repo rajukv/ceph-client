@@ -5868,3 +5868,4 @@ MODULE_AUTHOR("Jeff Garzik <jeff@garzik.org>");
 
 MODULE_DESCRIPTION("RADOS Block Device (RBD) driver");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("sd-15.3.30");

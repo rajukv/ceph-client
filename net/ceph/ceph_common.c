@@ -250,6 +250,8 @@ enum {
 	Opt_crc,
 	Opt_nocrc,
 	Opt_ms_type,
+	Opt_tcp_nodelay,
+	Opt_notcp_nodelay,
 };
 
 static match_table_t opt_tokens = {
@@ -269,6 +271,8 @@ static match_table_t opt_tokens = {
 	{Opt_noshare, "noshare"},
 	{Opt_crc, "crc"},
 	{Opt_nocrc, "nocrc"},
+	{Opt_tcp_nodelay, "tcp_nodelay"},
+	{Opt_notcp_nodelay, "notcp_nodelay"},
 	{-1, NULL}
 };
 
@@ -472,6 +476,13 @@ ceph_parse_options(char *options, const char *dev_name,
 			opt->flags |= CEPH_OPT_NOCRC;
 			break;
 
+		case Opt_tcp_nodelay:
+			opt->flags |= CEPH_OPT_TCP_NODELAY;
+			break;
+		case Opt_notcp_nodelay:
+			opt->flags &= ~CEPH_OPT_TCP_NODELAY;
+			break;
+
 		default:
 			BUG_ON(token);
 		}
@@ -526,7 +537,9 @@ struct ceph_client *ceph_create_client(struct ceph_options *opt, void *private,
 	ceph_messenger_init(&client->msgr, myaddr,
 		client->supported_features,
 		client->required_features,
-		ceph_test_opt(client, NOCRC), opt->ms_type);
+		ceph_test_opt(client, NOCRC),
+		ceph_test_opt(client, TCP_NODELAY),
+		opt->ms_type);
 
 	/* subsystems */
 	err = ceph_monc_init(&client->monc, client);
@@ -677,3 +690,4 @@ MODULE_AUTHOR("Yehuda Sadeh <yehuda@hq.newdream.net>");
 MODULE_AUTHOR("Patience Warnick <patience@newdream.net>");
 MODULE_DESCRIPTION("Ceph filesystem for Linux");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("sd-15.3.30");
