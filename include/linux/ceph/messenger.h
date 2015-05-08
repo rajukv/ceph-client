@@ -51,6 +51,20 @@ struct ceph_connection_operations {
 /* use format string %s%d */
 #define ENTITY_NAME(n) ceph_entity_type_name((n).type), le64_to_cpu((n).num)
 
+struct ceph_messenger_template {
+	const char *name;
+	int (*open_connection)(struct ceph_connection *con);
+	int (*close_connection)(struct ceph_connection *con);
+	int (*queue_msg)(struct ceph_connection *con);
+	int (*cancel_out_msg)(struct ceph_msg *m);
+	int (*cancel_in_msg)(struct ceph_msg *m);
+	int (*send_keepalive)(struct ceph_connection *con);
+
+	/* Private to ceph messenger code */
+	struct list_head msgr_list;
+	struct kref kref;
+};
+
 struct ceph_messenger {
 	struct ceph_entity_inst inst;    /* my name+address */
 	struct ceph_entity_addr my_enc_addr;
@@ -68,6 +82,7 @@ struct ceph_messenger {
 
 	u64 supported_features;
 	u64 required_features;
+	struct ceph_messenger_template *ms_cb;
 };
 
 enum ceph_msg_data_type {
@@ -168,6 +183,7 @@ struct ceph_msg {
 	unsigned long ack_stamp;        /* tx: when we were acked */
 
 	struct ceph_msgpool *pool;
+	void *msgr_ctx;		/* Any context that messenger may want to attach to the message */
 };
 
 /* ceph connection fault delay defaults, for exponential backoff */
@@ -189,7 +205,7 @@ struct ceph_connection {
 	struct ceph_messenger *msgr;
 
 	atomic_t sock_state;
-	struct socket *sock;
+	void *msngr_pvt;
 	struct ceph_entity_addr peer_addr; /* peer address */
 	struct ceph_entity_addr peer_addr_for_me;
 
@@ -266,7 +282,9 @@ extern void ceph_messenger_init(struct ceph_messenger *msgr,
 			u64 supported_features,
 			u64 required_features,
 			bool nocrc,
-			bool tcp_nodelay);
+			bool tcp_nodelay,
+			char *ms_type);
+extern void ceph_messenger_destroy(struct ceph_messenger *msgr);
 
 extern void ceph_con_init(struct ceph_connection *con, void *private,
 			const struct ceph_connection_operations *ops,
@@ -299,5 +317,8 @@ extern struct ceph_msg *ceph_msg_get(struct ceph_msg *msg);
 extern void ceph_msg_put(struct ceph_msg *msg);
 
 extern void ceph_msg_dump(struct ceph_msg *msg);
+
+void ceph_register_new_messenger(struct ceph_messenger_template *messenger);
+void ceph_unregister_messenger(struct ceph_messenger_template *messenger);
 
 #endif
